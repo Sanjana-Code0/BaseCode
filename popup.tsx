@@ -1,27 +1,80 @@
-import { useState, useRef, useEffect } from "react"
+import React, { Component, useState, useRef, useEffect } from "react"
 import { useStorage } from "@plasmohq/storage/hook"
+import { Storage } from "@plasmohq/storage"
 import { DEFAULT_API_KEY } from "./shared/groq"
 
 import "./style.css"
 
-import { PaperAirplaneIcon, Cog6ToothIcon, XMarkIcon, SparklesIcon } from "@heroicons/react/24/solid"
+import { PaperAirplaneIcon, Cog6ToothIcon, XMarkIcon, SparklesIcon, EyeIcon, SunIcon, MoonIcon, PaintBrushIcon } from "@heroicons/react/24/solid"
 
 interface Message {
   role: "user" | "bot"
   text: string
 }
 
+class ErrorBoundary extends Component<{ children: React.ReactNode }, { hasError: boolean, error: Error | null }> {
+  constructor(props: any) {
+    super(props)
+    this.state = { hasError: false, error: null }
+  }
+
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error }
+  }
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("Popup Error Boundary caught:", error, errorInfo)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="p-4 text-red-600">
+          <h2>Something went wrong.</h2>
+          <pre className="text-xs whitespace-pre-wrap mt-2">{this.state.error?.toString()}</pre>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
 function IndexPopup() {
+  return (
+    <ErrorBoundary>
+      <IndexPopupContent />
+    </ErrorBoundary>
+  )
+}
+
+function IndexPopupContent() {
   const [apiKey, setApiKey] = useStorage("groq_api_key", "")
   const [showSettings, setShowSettings] = useState(false)
+  const [currentDomain, setCurrentDomain] = useState("")
+  const [activeMode, setActiveMode] = useState("none")
+  const [showModeSelector, setShowModeSelector] = useState(false)
   const [input, setInput] = useState("")
   const [messages, setMessages] = useState<Message[]>([
-    { role: "bot", text: "Hello! I'm ShadowLight. I can summarize pages, guide you through tasks, or adjust contrast." }
+    { role: "bot", text: "👋 Hi! I can help you:\n\n📄 Summarize pages\n🎯 Adjust contrast\n🔍 Guide you through tasks" }
   ])
   const [isLoading, setIsLoading] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const hasKey = !!apiKey || !!DEFAULT_API_KEY
+
+  // Get current domain and load per-site mode
+  useEffect(() => {
+    chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+      const url = tabs[0]?.url
+      if (url) {
+        const domain = new URL(url).hostname
+        setCurrentDomain(domain)
+        const storage = new Storage()
+        const mode = await storage.get(`accessibility_mode_${domain}`) || "none"
+        setActiveMode(mode)
+      }
+    })
+  }, [])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -42,6 +95,35 @@ function IndexPopup() {
     setIsLoading(true)
 
     try {
+      // Check for mode changes first
+      const msgLower = userMsg.toLowerCase()
+      if (msgLower.includes("auto fix") || msgLower.includes("default fix")) {
+        await updateMode("default-fix")
+        setMessages(prev => [...prev, { role: "bot", text: "\u2705 Auto Fix mode activated! Low contrast elements will be adjusted." }])
+        setIsLoading(false)
+        return
+      } else if (msgLower.includes("high light") || msgLower.includes("light mode")) {
+        await updateMode("high-contrast-light")
+        setMessages(prev => [...prev, { role: "bot", text: "\u2705 High Contrast Light mode activated!" }])
+        setIsLoading(false)
+        return
+      } else if (msgLower.includes("high dark") || msgLower.includes("dark mode")) {
+        await updateMode("high-contrast-dark")
+        setMessages(prev => [...prev, { role: "bot", text: "\u2705 High Contrast Dark mode activated!" }])
+        setIsLoading(false)
+        return
+      } else if (msgLower.includes("color-blind") || msgLower.includes("color blind")) {
+        await updateMode("color-blind")
+        setMessages(prev => [...prev, { role: "bot", text: "\u2705 Color-Blind Friendly mode activated!" }])
+        setIsLoading(false)
+        return
+      } else if (msgLower.includes("turn off") || msgLower.includes("disable") || msgLower.includes("reset")) {
+        await updateMode("none")
+        setMessages(prev => [...prev, { role: "bot", text: "\u2705 Accessibility mode turned off." }])
+        setIsLoading(false)
+        return
+      }
+
       let type = "CHAT"
       let payload: any = {
         history: messages.map(m => ({ role: m.role === "bot" ? "assistant" : "user", content: m.text })),
@@ -65,7 +147,12 @@ function IndexPopup() {
               type === "SUMMARIZE" ? (payload = contentRes.text) : (payload.context = contentRes.text)
             }
           } catch (e) {
-            console.log("Context fetch failed:", e)
+            console.log("Content script not loaded. Refresh the page and try again.")
+            if (type === "SUMMARIZE") {
+              setMessages(prev => [...prev, { role: "bot", text: "Please refresh the web page first, then try again." }])
+              setIsLoading(false)
+              return
+            }
           }
         }
       }
@@ -78,8 +165,12 @@ function IndexPopup() {
         if (type === "GUIDE") {
           const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
           if (tab?.id) {
-            await chrome.tabs.sendMessage(tab.id, { type: "START_GUIDE", steps: res.data })
-            setMessages(prev => [...prev, { role: "bot", text: "I've highlighted the steps on the page for you. Follow the spotlight!" }])
+            try {
+              await chrome.tabs.sendMessage(tab.id, { type: "START_GUIDE", steps: res.data })
+              setMessages(prev => [...prev, { role: "bot", text: "I've highlighted the steps on the page for you. Follow the spotlight!" }])
+            } catch (e) {
+              setMessages(prev => [...prev, { role: "bot", text: "Please refresh the page first, then try the guide again." }])
+            }
           }
         } else {
           setMessages(prev => [...prev, { role: "bot", text: typeof res.data === 'string' ? res.data : JSON.stringify(res.data) }])
@@ -97,10 +188,61 @@ function IndexPopup() {
     }
   }
 
-  const toggleContrast = async () => {
+  const handleSummarize = async () => {
+    if (!hasKey) {
+      setShowSettings(true)
+      return
+    }
+
+    setMessages(prev => [...prev, { role: "user", text: "📄 Summarize this page" }])
+    setIsLoading(true)
+
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+      let content = ""
+
+      if (tab?.id) {
+        try {
+          const contentRes = await chrome.tabs.sendMessage(tab.id, { type: "GET_TEXT" })
+          content = contentRes?.text || ""
+        } catch (e) {
+          setMessages(prev => [...prev, { role: "bot", text: "⚠️ Please refresh the page first, then try again." }])
+          setIsLoading(false)
+          return
+        }
+      }
+
+      const res = await chrome.runtime.sendMessage({ type: "SUMMARIZE", payload: content })
+
+      if (res.success) {
+        setMessages(prev => [...prev, { role: "bot", text: res.data }])
+      } else {
+        setMessages(prev => [...prev, { role: "bot", text: `❌ Error: ${res.error || 'Unknown error'}` }])
+      }
+    } catch (err) {
+      setMessages(prev => [...prev, { role: "bot", text: `❌ ${err.message}` }])
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const updateMode = async (mode: string) => {
+    const newMode = activeMode === mode ? "none" : mode
+    setActiveMode(newMode)
+
+    // Save per-domain
+    if (currentDomain) {
+      const storage = new Storage()
+      await storage.set(`accessibility_mode_${currentDomain}`, newMode)
+    }
+
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
     if (tab?.id) {
-      chrome.tabs.sendMessage(tab.id, { type: "TOGGLE_CONTRAST" })
+      try {
+        await chrome.tabs.sendMessage(tab.id, { type: "SET_ACCESSIBILITY_MODE", mode: newMode })
+      } catch (e) {
+        console.log("Content script not ready. Mode will apply on page load.")
+      }
     }
   }
 
@@ -115,17 +257,125 @@ function IndexPopup() {
           </h1>
         </div>
         <div className="flex gap-2 items-center">
-          <button
-            onClick={toggleContrast}
-            className="text-xs font-semibold px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-full transition-colors"
-          >
-            Contrast
-          </button>
           <button onClick={() => setShowSettings(!showSettings)} className="text-gray-400 hover:text-gray-600 transition-colors">
             <Cog6ToothIcon className="w-5 h-5" />
           </button>
         </div>
       </header>
+
+      {/* Action Buttons Bar */}
+      {!showSettings && (
+        <div className="bg-gradient-to-r from-brand-50 to-blue-50 border-b border-brand-100 px-3 py-2.5">
+          <div className="flex gap-2">
+            <button
+              onClick={handleSummarize}
+              disabled={isLoading}
+              className="flex-1 bg-white hover:bg-brand-50 text-brand-600 font-semibold px-4 py-2.5 rounded-lg shadow-sm border border-brand-200 transition-all hover:shadow disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <span className="text-sm">Summarize</span>
+            </button>
+            <button
+              onClick={() => setShowModeSelector(true)}
+              className="flex-1 bg-white hover:bg-brand-50 text-brand-600 font-semibold px-4 py-2.5 rounded-lg shadow-sm border border-brand-200 transition-all hover:shadow flex items-center justify-center gap-2"
+            >
+              <EyeIcon className="w-4 h-4" />
+              <span className="text-sm">Contrast</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Mode Selection Panel */}
+      {showModeSelector && (
+        <div className="bg-white border-b border-gray-200 p-3">
+          <div className="flex justify-between items-center mb-3">
+            <h3 className="text-sm font-bold text-gray-700">🎨 Select Contrast Mode</h3>
+            <button onClick={() => setShowModeSelector(false)} className="text-gray-400 hover:text-gray-600">
+              <XMarkIcon className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={async () => {
+                await updateMode("default-fix")
+                setShowModeSelector(false)
+              }}
+              className={`p-3 rounded-lg border-2 transition-all text-left ${activeMode === "default-fix"
+                  ? "border-brand-500 bg-brand-50"
+                  : "border-gray-200 hover:border-brand-300 bg-white"
+                }`}
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <EyeIcon className="w-4 h-4 text-brand-600" />
+                <span className="font-semibold text-xs text-gray-800">Auto Fix</span>
+              </div>
+              <p className="text-[10px] text-gray-500">Adjusts low contrast</p>
+            </button>
+            <button
+              onClick={async () => {
+                await updateMode("high-contrast-light")
+                setShowModeSelector(false)
+              }}
+              className={`p-3 rounded-lg border-2 transition-all text-left ${activeMode === "high-contrast-light"
+                  ? "border-brand-500 bg-brand-50"
+                  : "border-gray-200 hover:border-brand-300 bg-white"
+                }`}
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <SunIcon className="w-4 h-4 text-yellow-500" />
+                <span className="font-semibold text-xs text-gray-800">High Light</span>
+              </div>
+              <p className="text-[10px] text-gray-500">White background</p>
+            </button>
+            <button
+              onClick={async () => {
+                await updateMode("high-contrast-dark")
+                setShowModeSelector(false)
+              }}
+              className={`p-3 rounded-lg border-2 transition-all text-left ${activeMode === "high-contrast-dark"
+                  ? "border-brand-500 bg-brand-50"
+                  : "border-gray-200 hover:border-brand-300 bg-white"
+                }`}
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <MoonIcon className="w-4 h-4 text-indigo-600" />
+                <span className="font-semibold text-xs text-gray-800">High Dark</span>
+              </div>
+              <p className="text-[10px] text-gray-500">Black background</p>
+            </button>
+            <button
+              onClick={async () => {
+                await updateMode("color-blind")
+                setShowModeSelector(false)
+              }}
+              className={`p-3 rounded-lg border-2 transition-all text-left ${activeMode === "color-blind"
+                  ? "border-brand-500 bg-brand-50"
+                  : "border-gray-200 hover:border-brand-300 bg-white"
+                }`}
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <PaintBrushIcon className="w-4 h-4 text-purple-500" />
+                <span className="font-semibold text-xs text-gray-800">Color-Blind</span>
+              </div>
+              <p className="text-[10px] text-gray-500">Enhanced colors</p>
+            </button>
+          </div>
+          {activeMode !== "none" && (
+            <button
+              onClick={async () => {
+                await updateMode("none")
+                setShowModeSelector(false)
+              }}
+              className="mt-2 w-full py-2 text-xs text-red-600 hover:text-red-700 font-medium"
+            >
+              ✕ Turn Off Accessibility Mode
+            </button>
+          )}
+        </div>
+      )}
 
       {showSettings ? (
         <div className="flex-1 p-6 bg-slate-50 flex flex-col gap-4 animate-in fade-in slide-in-from-bottom-4 duration-300">

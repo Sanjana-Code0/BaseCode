@@ -1,6 +1,9 @@
 import cssText from "data-text:./style.css"
 import type { PlasmoCSConfig } from "plasmo"
 import { useEffect, useState } from "react"
+import { useStorage } from "@plasmohq/storage/hook"
+import { Storage } from "@plasmohq/storage"
+import { getContrastRatio, parseColor, adjustColorForContrast, type RGB } from "./shared/colors"
 
 export const config: PlasmoCSConfig = {
     matches: ["<all_urls>"]
@@ -22,8 +25,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ text: clone.innerText })
     }
 
-    if (msg.type === "TOGGLE_CONTRAST") {
-        toggleContrast()
+    if (msg.type === "SET_ACCESSIBILITY_MODE") {
+        setAccessibilityMode(msg.mode)
         sendResponse({ success: true })
     }
 
@@ -35,27 +38,146 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 })
 
-function toggleContrast() {
-    const id = "shadowlight-contrast-style"
-    const existing = document.getElementById(id)
-    if (existing) {
-        existing.remove()
-        return
+    // Load per-site accessibility mode on page load
+    ; (async () => {
+        const storage = new Storage()
+        const domain = window.location.hostname
+        const mode = await storage.get(`accessibility_mode_${domain}`)
+        if (mode && mode !== "none") {
+            setAccessibilityMode(mode)
+        }
+    })()
+
+function setAccessibilityMode(mode: string) {
+    // Clear existing styles
+    const contrastId = "shadowlight-contrast-style"
+    document.getElementById(contrastId)?.remove()
+
+    // Revert fixes
+    document.querySelectorAll("[data-shadow-fixed]").forEach(el => {
+        if (el instanceof HTMLElement) {
+            el.style.removeProperty("color")
+            el.style.removeProperty("background-color")
+            el.style.removeProperty("border-color")
+            el.removeAttribute("data-shadow-fixed")
+        }
+    })
+
+    if (mode === "none") return
+
+    if (mode === "high-contrast-light") {
+        applyStaticStyle(contrastId, `
+            * {
+                background-color: #ffffff !important;
+                color: #000000 !important;
+                border-color: #000000 !important;
+                text-shadow: none !important;
+                box-shadow: none !important;
+            }
+            a { color: #0000ee !important; text-decoration: underline !important; }
+            img, video { filter: grayscale(100%); }
+        `)
+    } else if (mode === "high-contrast-dark") {
+        applyStaticStyle(contrastId, `
+            * {
+                background-color: #000000 !important;
+                color: #ffffff !important;
+                border-color: #ffffff !important;
+                text-shadow: none !important;
+                box-shadow: none !important;
+            }
+            a { color: #ffff00 !important; text-decoration: underline !important; }
+            img, video { filter: grayscale(100%) invert(100%); }
+        `)
+    } else if (mode === "color-blind") {
+        // Simple color-blind friendly filter (e.g., avoid red/green conflicts)
+        // This is a basic approach; more advanced would involve SVG filters.
+        applyStaticStyle(contrastId, `
+            * {
+                filter: saturate(1.5) hue-rotate(10deg);
+            }
+        `)
+    } else if (mode === "default-fix") {
+        applyDefaultFix()
     }
+}
+
+function applyStaticStyle(id: string, css: string) {
     const style = document.createElement("style")
     style.id = id
-    style.textContent = `
-        * {
-            background-color: #000 !important;
-            color: #fff !important;
-            border-color: #fff !important;
-            text-shadow: none !important;
-            box-shadow: none !important;
-        }
-        img, video { opacity: 0.8; }
-        a { color: #ffff00 !important; text-decoration: underline !important; }
-    `
+    style.textContent = css
     document.head.appendChild(style)
+}
+
+function applyDefaultFix() {
+    const elements = document.querySelectorAll("body *")
+    const styleId = "shadowlight-fix-style"
+    let styleContent = ""
+
+    elements.forEach((el, index) => {
+        if (!(el instanceof HTMLElement)) return
+
+        const style = window.getComputedStyle(el)
+        const textStr = el.innerText?.trim()
+        if (!textStr && !el.tagName.match(/INPUT|TEXTAREA|SELECT|BUTTON/)) return
+
+        const color = parseColor(style.color)
+        const bgColor = getEffectiveBackgroundColor(el)
+
+        if (!color || !bgColor) return
+
+        const ratio = getContrastRatio(color, bgColor)
+        const targetRatio = isLargeText(el) ? 3.0 : 4.5
+
+        if (ratio < targetRatio) {
+            const newColor = adjustColorForContrast(bgColor, targetRatio)
+            const rgbStr = `rgb(${newColor.r}, ${newColor.g}, ${newColor.b})`
+
+            // Generate a unique class or just use data attributes/inline styles
+            // Inline styles are easiest to ensure override
+            el.style.setProperty("color", rgbStr, "important")
+            el.setAttribute("data-shadow-fixed", "true")
+
+            // If still not enough (unlikely with black/white), change background
+            if (getContrastRatio(newColor, bgColor) < targetRatio) {
+                const newBg = newColor.r > 128 ? { r: 0, g: 0, b: 0 } : { r: 255, g: 255, b: 255 }
+                el.style.setProperty("background-color", `rgb(${newBg.r}, ${newBg.g}, ${newBg.b})`, "important")
+            }
+        }
+
+        // Check icons/borders if they are important (e.g. form elements)
+        if (el.tagName.match(/INPUT|TEXTAREA|SELECT|BUTTON/)) {
+            const borderColor = parseColor(style.borderColor)
+            if (borderColor && getContrastRatio(borderColor, bgColor) < 3.0) {
+                const newBorderColor = adjustColorForContrast(bgColor, 3.0)
+                el.style.setProperty("border-color", `rgb(${newBorderColor.r}, ${newBorderColor.g}, ${newBorderColor.b})`, "important")
+                el.setAttribute("data-shadow-fixed", "true")
+            }
+        }
+    })
+}
+
+function isLargeText(element: HTMLElement): boolean {
+    const style = window.getComputedStyle(element)
+    const fontSize = parseFloat(style.fontSize)
+    const fontWeight = style.fontWeight
+    const isBold = fontWeight === "bold" || parseInt(fontWeight) >= 700
+
+    if (isBold && fontSize >= 18.66) return true // 14pt
+    if (fontSize >= 24) return true // 18pt
+    return false
+}
+
+function getEffectiveBackgroundColor(element: HTMLElement): RGB {
+    let current: HTMLElement | null = element
+    while (current) {
+        const bg = window.getComputedStyle(current).backgroundColor
+        if (bg && bg !== "rgba(0, 0, 0, 0)" && bg !== "transparent") {
+            return parseColor(bg) || { r: 255, g: 255, b: 255 }
+        }
+        current = current.parentElement
+    }
+    return { r: 255, g: 255, b: 255 }
 }
 
 // Overlay Component
@@ -64,6 +186,11 @@ export default function ShadowOverlay() {
     const [activeStep, setActiveStep] = useState(0)
     const [isVisible, setIsVisible] = useState(false)
     const [targetRect, setTargetRect] = useState<DOMRect | null>(null)
+    const [activeMode] = useStorage("accessibility_mode", "none")
+
+    useEffect(() => {
+        if (activeMode) setAccessibilityMode(activeMode)
+    }, [activeMode])
 
     useEffect(() => {
         const handler = (e: CustomEvent) => {
