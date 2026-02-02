@@ -1,33 +1,76 @@
-This is a [Plasmo extension](https://docs.plasmo.com/) project bootstrapped with [`plasmo init`](https://www.npmjs.com/package/plasmo).
+# ShadowLight
 
-## Getting Started
+**ShadowLight** is an AI-Powered accessibility and guided web interaction assistant Chrome Extension built with [Plasmo](https://docs.plasmo.com/).
 
-First, run the development server:
+## Features
 
+- **AI Summarization**: Get concise summaries of any webpage using Llama3 (via Groq).
+- **Visual Guidance**: Step-by-step visual navigation to elements (e.g., "Show me where to login").
+- **Accessibility**: High-contrast mode toggle for easier reading.
+- **Chatbot Interface**: Natural language interaction with the extension.
+- **Privacy Focused**: No data storage, runs locally or via secure API calls.
+
+## Tech Stack
+
+- **Framework**: Plasmo (Manifest V3)
+- **UI**: React, TypeScript, Tailwind CSS, Headless UI
+- **AI**: Groq Cloud API (Llama3-8B-8192)
+- **State**: TanStack Query
+- **Messaging**: Chrome Extension Messaging API
+
+## Prerequisites
+
+- Node.js 16+
+- NPM or PNPM
+- A [Groq Cloud API Key](https://console.groq.com/)
+
+## Installation
+
+1. Clone the repository (if not already local).
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+
+## Development
+
+Run the development server:
 ```bash
-pnpm dev
-# or
 npm run dev
+# or
+plasmo dev
 ```
+Load the extension in Chrome:
+1. Go to `chrome://extensions/`
+2. Enable **Developer mode**.
+3. Click **Load unpacked**.
+4. Select the `build/chrome-mv3-dev` directory.
 
-Open your browser and load the appropriate development build. For example, if you are developing for the chrome browser, using manifest v3, use: `build/chrome-mv3-dev`.
-
-You can start editing the popup by modifying `popup.tsx`. It should auto-update as you make changes. To add an options page, simply add a `options.tsx` file to the root of the project, with a react component default exported. Likewise to add a content page, add a `content.ts` file to the root of the project, importing some module and do some logic, then reload the extension on your browser.
-
-For further guidance, [visit our Documentation](https://docs.plasmo.com/)
-
-## Making production build
-
-Run the following:
+## Build for Production
 
 ```bash
-pnpm build
-# or
 npm run build
+# or
+plasmo build
 ```
+The output will be in `build/chrome-mv3-prod`.
 
-This should create a production bundle for your extension, ready to be zipped and published to the stores.
+## Usage
 
-## Submit to the webstores
+1. **Set API Key**: Open the extension popup, click the settings icon (gear), and enter your Groq API Key.
+2. **Summarize**: Type "Summarize this page" in the chat.
+3. **Guidance**: Type "Guide me to [action]" (e.g., "Guide me to the login button").
+4. **Contrast**: Click the "Contrast" button to toggle high-contrast mode.
 
-The easiest way to deploy your Plasmo extension is to use the built-in [bpp](https://bpp.browser.market) GitHub action. Prior to using this action however, make sure to build your extension and upload the first version to the store to establish the basic credentials. Then, simply follow [this setup instruction](https://docs.plasmo.com/framework/workflows/submit) and you should be on your way for automated submission!
+## Example Prompts
+
+- "Summarize this article for me."
+- "Where is the checkout button?"
+- "Help me find the contact form."
+
+## Structure
+
+- `/background.ts` - AI Controller & Service Worker
+- `/content.tsx` - Visual Overlay & Page Scraper
+- `/popup.tsx` - Chat Interface
+- `/shared` - Utilities & Types
