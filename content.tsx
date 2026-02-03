@@ -15,26 +15,67 @@ export const getStyle = () => {
     return style
 }
 
+// Helper to check if extension context is still valid
+function isContextValid(): boolean {
+    try {
+        // Try to access chrome.runtime - if context is invalidated, this will throw
+        return !!chrome.runtime?.id
+    } catch {
+        return false
+    }
+}
+
+// Helper to handle context invalidation gracefully
+function handleContextInvalidation() {
+    console.warn("[ShadowLight] Extension context invalidated. Please refresh the page to reconnect.")
+    // Remove any UI elements or styles we added
+    document.getElementById("shadowlight-contrast-style")?.remove()
+    document.querySelectorAll("[data-shadow-fixed]").forEach(el => {
+        if (el instanceof HTMLElement) {
+            el.style.removeProperty("color")
+            el.style.removeProperty("background-color")
+            el.style.removeProperty("border-color")
+            el.removeAttribute("data-shadow-fixed")
+        }
+    })
+}
+
 // Global listener for non-React tasks (Scraping, Contrast)
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (msg.type === "GET_TEXT") {
-        // Remove scripts and styles for cleaner text
-        const clone = document.body.cloneNode(true) as HTMLElement
-        const scripts = clone.querySelectorAll("script, style, noscript")
-        scripts.forEach(el => el.remove())
-        sendResponse({ text: clone.innerText })
+    // Check if context is still valid
+    if (!isContextValid()) {
+        handleContextInvalidation()
+        return false
     }
 
-    if (msg.type === "SET_ACCESSIBILITY_MODE") {
-        setAccessibilityMode(msg.mode)
-        sendResponse({ success: true })
-    }
+    try {
+        if (msg.type === "GET_TEXT") {
+            // Remove scripts and styles for cleaner text
+            const clone = document.body.cloneNode(true) as HTMLElement
+            const scripts = clone.querySelectorAll("script, style, noscript")
+            scripts.forEach(el => el.remove())
+            sendResponse({ text: clone.innerText })
+        }
 
-    // START_GUIDE handled by React component via event or storage, 
-    // but we can also dispatch a custom event to valid React component if it's listening.
-    if (msg.type === "START_GUIDE") {
-        window.dispatchEvent(new CustomEvent("project-shadow-guide", { detail: msg.steps }))
-        sendResponse({ received: true })
+        if (msg.type === "SET_ACCESSIBILITY_MODE") {
+            setAccessibilityMode(msg.mode)
+            sendResponse({ success: true })
+        }
+
+        // START_GUIDE handled by React component via event or storage, 
+        // but we can also dispatch a custom event to valid React component if it's listening.
+        if (msg.type === "START_GUIDE") {
+            window.dispatchEvent(new CustomEvent("project-shadow-guide", { detail: msg.steps }))
+            sendResponse({ received: true })
+        }
+        return true // Keep channel open for async
+    } catch (error) {
+        if (error.message?.includes("Extension context invalidated")) {
+            handleContextInvalidation()
+            return false
+        }
+        console.error("[ShadowLight] Message handler error:", error)
+        return false
     }
 })
 

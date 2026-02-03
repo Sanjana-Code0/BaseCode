@@ -12,11 +12,11 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
 
 async function handleMessage(message: ExtensionMessage, sendResponse: (response: any) => void) {
     try {
-        const storageKey = await storage.get("groq_api_key")
-        const apiKey = storageKey || DEFAULT_API_KEY
+        // API key is now only from environment variables (.env file)
+        const apiKey = DEFAULT_API_KEY
 
         if (!apiKey) {
-            sendResponse({ error: "API Key missing. Please set it in Settings or code." })
+            sendResponse({ error: "API Key missing. Please configure PLASMO_PUBLIC_GROQ_API_KEY in .env file." })
             return
         }
         initGroq(apiKey)
