@@ -1,7 +1,7 @@
 import Groq from "groq-sdk"
 
-// PASTE YOUR GROQ API KEY HERE
-export const DEFAULT_API_KEY = ""
+// API Key is loaded from .env file via PLASMO_PUBLIC_GROQ_API_KEY
+export const DEFAULT_API_KEY = process.env.PLASMO_PUBLIC_GROQ_API_KEY || ""
 
 let groq: Groq | null = null
 
